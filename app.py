@@ -1,7 +1,8 @@
 import streamlit as st
 import os
+import subprocess
 from pathlib import Path
-from pptx import Presentation
+import fitz  # PyMuPDF untuk render PDF ke Gambar
 
 # ---------------------------------------------------------
 # KONFIGURASI HALAMAN
@@ -35,7 +36,6 @@ else:
         user = st.text_input("Username")
         pwd = st.text_input("Password", type="password")
         if st.button("Masuk"):
-            # Ganti username & password sesuai keinginan Anda
             if user == "dosen" and pwd == "amikom123":
                 st.session_state.logged_in = True
                 st.session_state.role = "admin"
@@ -59,7 +59,40 @@ else:
     st.sidebar.info("💡 Mahasiswa memiliki hak akses **Hanya Baca (Read-Only)**.")
 
 # ---------------------------------------------------------
-# MENU 1: BACA MATERI & IN-BROWSER VIEWERS (.pptx, .md, .pdf)
+# FUNGSI KONVERSI PPTX KE GAMBAR SLIDE
+# ---------------------------------------------------------
+def render_pptx_slides(pptx_path):
+    pptx_path = Path(pptx_path)
+    pdf_path = pptx_path.with_suffix(".pdf")
+    
+    # 1. Konversi PPTX ke PDF menggunakan LibreOffice (jika belum ada PDF-nya)
+    if not pdf_path.exists():
+        try:
+            subprocess.run(
+                ["soffice", "--headless", "--convert-to", "pdf", str(pptx_path), "--outdir", str(pptx_path.parent)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        except Exception as e:
+            return None, f"LibreOffice error: {e}"
+            
+    # 2. Render setiap halaman PDF menjadi gambar menggunakan PyMuPDF
+    if pdf_path.exists():
+        try:
+            doc = fitz.open(str(pdf_path))
+            slide_images = []
+            for page in doc:
+                pix = page.get_pixmap(dpi=150) # Resolusi tajam
+                slide_images.append(pix.tobytes("png"))
+            return slide_images, None
+        except Exception as e:
+            return None, f"PDF rendering error: {e}"
+            
+    return None, "Gagal memproses file PowerPoint."
+
+# ---------------------------------------------------------
+# MENU 1: BACA MATERI & VISUAL VIEWER (.pptx, .md, .pdf)
 # ---------------------------------------------------------
 if menu == "📖 Baca Materi":
     st.title("📚 Repositori Materi Kuliah")
@@ -75,7 +108,7 @@ if menu == "📖 Baca Materi":
             pilih_mk = st.selectbox("📌 Pilih Mata Kuliah:", daftar_mk)
 
         mk_path = BASE_DIR / pilih_mk
-        daftar_file = [f.name for f in mk_path.iterdir() if f.is_file()]
+        daftar_file = [f.name for f in mk_path.iterdir() if f.is_file() and not f.name.endswith(".pdf_temp")]
 
         if not daftar_file:
             st.warning(f"Belum ada file di dalam mata kuliah **{pilih_mk}**.")
@@ -95,32 +128,42 @@ if menu == "📖 Baca Materi":
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     st.markdown(f.read())
 
-            # 2. Viewer untuk PowerPoint (.pptx) Langsung di Browser
+            # 2. Viewer Visual untuk PowerPoint (.pptx) Beneran (Slide Asli)
             elif ext == ".pptx":
-                st.success("📊 PowerPoint Presentation Viewer (Tampil Langsung di Browser)")
-                try:
-                    prs = Presentation(file_path)
-                    st.caption(f"Total Slide: {len(prs.slides)}")
+                st.success("📊 PowerPoint Slide Deck Viewer (Tampilan Visual Asli)")
+                
+                with st.spinner("Sedang merender slide PowerPoint..."):
+                    images, err = render_pptx_slides(file_path)
+                
+                if err:
+                    st.warning("⚠️ Fitur preview visual memerlukan komponen server LibreOffice. Menampilkan opsi download file.")
+                    st.error(err)
+                elif images:
+                    st.info(f"Total Slide: **{len(images)}** slide. Gunakan tombol navigasi di bawah untuk melihat slide.")
                     
-                    # Tampilkan slide menggunakan tab interaktif
-                    slide_tabs = st.tabs([f"Slide {i+1}" for i in range(len(prs.slides))])
-                    for i, slide in enumerate(prs.slides):
-                        with slide_tabs[i]:
-                            st.markdown(f"#### Slide {i+1}")
-                            slide_texts = []
-                            for shape in slide.shapes:
-                                if shape.has_text_frame:
-                                    for p in shape.text_frame.paragraphs:
-                                        if p.text.strip():
-                                            slide_texts.append(p.text)
-                            
-                            if slide_texts:
-                                for t in slide_texts:
-                                    st.markdown(f"- {t}")
-                            else:
-                                st.info("*(Slide ini berisi gambar / bentuk grafis tanpa teks teks terdeteksi)*")
-                except Exception as e:
-                    st.error(f"Gagal memuat file PowerPoint: {e}")
+                    # State untuk navigasi slide interaktif
+                    if "slide_idx" not in st.session_state:
+                        st.session_state.slide_idx = 0
+                    
+                    # Batasi index agar tidak out of bound
+                    if st.session_state.slide_idx >= len(images):
+                        st.session_state.slide_idx = 0
+
+                    # Tampilkan gambar slide aktif
+                    st.image(images[st.session_state.slide_idx], use_container_width=True, caption=f"Slide {st.session_state.slide_idx + 1} dari {len(images)}")
+                    
+                    # Tombol Navigasi Slide Sebelumnya & Berikutnya
+                    col_prev, col_info, col_next = st.columns([1, 2, 1])
+                    with col_prev:
+                        if st.button("⬅️ Slide Sebelumnya") and st.session_state.slide_idx > 0:
+                            st.session_state.slide_idx -= 1
+                            st.rerun()
+                    with col_info:
+                        st.markdown(f"<p style='text-align: center; font-weight: bold;'>Slide {st.session_state.slide_idx + 1} / {len(images)}</p>", unsafe_allow_html=True)
+                    with col_next:
+                        if st.button("Slide Berikutnya ➡️") and st.session_state.slide_idx < len(images) - 1:
+                            st.session_state.slide_idx += 1
+                            st.rerun()
 
                 st.divider()
                 with open(file_path, "rb") as f:
@@ -209,7 +252,6 @@ elif menu == "✏️ Edit / Update Materi (CRUD)" and st.session_state.role == "
                 update_btn = st.form_submit_button("💾 Perbarui Materi", type="primary")
                 
                 if update_btn:
-                    # Jika nama file berubah, hapus yang lama
                     new_path = mk_path / new_filename
                     if pilih_file != new_filename and file_path.exists():
                         file_path.unlink()
@@ -241,7 +283,12 @@ elif menu == "⚙️ Kelola / Hapus" and st.session_state.role == "admin":
             
             st.divider()
             if st.button("🗑️ Hapus File Ini", type="primary"):
+                # Hapus file pptx/pdf/md utama dan file pdf sementara jika ada
+                pdf_temp = file_path.with_suffix(".pdf")
+                if pdf_temp.exists():
+                    pdf_temp.unlink()
                 file_path.unlink()
+                
                 if not list(mk_path.iterdir()):
                     mk_path.rmdir()
                 st.success(f"File **{pilih_file}** berhasil dihapus!")
