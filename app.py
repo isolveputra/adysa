@@ -1,155 +1,118 @@
 import streamlit as st
-import sqlite3
-import pandas as pd
+import os
+import shutil
 
 # ---------------------------------------------------------
 # KONFIGURASI HALAMAN
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Repositori Materi Kuliah",
+    page_title="Platform Upload Materi Kuliah",
     page_icon="📚",
     layout="wide"
 )
 
-# ---------------------------------------------------------
-# MANAJEMEN DATABASE (SQLite)
-# ---------------------------------------------------------
-DB_FILE = "materi_kuliah.db"
+# Folder utama tempat menyimpan file upload di server Streamlit
+BASE_DIR = "materi_terupload"
+os.makedirs(BASE_DIR, exist_ok=True)
 
-def init_db():
-    """Membuat tabel database jika belum ada."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS materi (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            matakuliah TEXT NOT NULL,
-            topik TEXT NOT NULL,
-            judul TEXT NOT NULL,
-            konten TEXT NOT NULL,
-            link_ref TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def add_materi(matakuliah, topik, judul, konten, link_ref):
-    """Menambah materi baru ke database."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO materi (matakuliah, topik, judul, konten, link_ref)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (matakuliah, topik, judul, konten, link_ref))
-    conn.commit()
-    conn.close()
-
-def get_all_materi():
-    """Mengambil semua materi."""
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM materi ORDER BY id DESC", conn)
-    conn.close()
-    return df
-
-def delete_materi(materi_id):
-    """Menghapus materi berdasarkan ID."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM materi WHERE id = ?", (materi_id,))
-    conn.commit()
-    conn.close()
-
-# Inisialisasi DB saat aplikasi dijalankan
-init_db()
+st.title("📚 Repositori Materi Kuliah Interaktif")
+st.caption("Upload dan akses modul/materi kuliah langsung dari browser.")
 
 # ---------------------------------------------------------
-# ANTARMUKA UTAMA (UI)
+# SIDEBAR: PANEL UPLOAD MATERI
 # ---------------------------------------------------------
-st.title("📚 Platform Repositori Materi Kuliah")
-st.caption("Aplikasi manajemen dan penyimpanan materi perkuliahan interaktif.")
+st.sidebar.header("📤 Form Upload Materi")
 
-# Sidebar Navigation
-menu = st.sidebar.radio("Navigasi", ["📖 Baca Materi", "➕ Tambah Materi Baru", "⚙️ Kelola / Hapus Materi"])
+# Input Nama Mata Kuliah & File
+mk_input = st.sidebar.text_input("Nama Mata Kuliah", placeholder="Contoh: Digital Forensics")
+uploaded_file = st.sidebar.file_uploader(
+    "Pilih File Materi", 
+    type=["pdf", "md", "txt", "docx", "pptx"]
+)
 
-# ---------------------------------------------------------
-# MENU 1: BACA MATERI
-# ---------------------------------------------------------
-if menu == "📖 Baca Materi":
-    st.header("📖 Daftar Materi Kuliah")
-    
-    df = get_all_materi()
-    
-    if df.empty:
-        st.info("Belum ada materi yang tersimpan. Silakan tambahkan materi melalui menu **➕ Tambah Materi Baru**.")
+# Tombol Simpan
+if st.sidebar.button("💾 Simpan Materi", type="primary"):
+    if not mk_input.strip():
+        st.sidebar.error("Harap isi Nama Mata Kuliah terlebih dahulu!")
+    elif uploaded_file is None:
+        st.sidebar.error("Pilih file materi yang ingin di-upload!")
     else:
-        # Filter berdasarkan Mata Kuliah
-        list_mk = ["Semua Mata Kuliah"] + list(df['matakuliah'].unique())
-        selected_mk = st.selectbox("Filter berdasarkan Mata Kuliah:", list_mk)
-        
-        if selected_mk != "Semua Mata Kuliah":
-            df_filtered = df[df['matakuliah'] == selected_mk]
-        else:
-            df_filtered = df
+        # Bersihkan nama folder dari karakter aneh
+        clean_mk_name = mk_input.strip().replace("/", "_").replace("\\", "_")
+        target_dir = os.path.join(BASE_DIR, clean_mk_name)
+        os.makedirs(target_dir, exist_ok=True)
+
+        # Simpan file ke direktori tujuan
+        save_path = os.path.join(target_dir, uploaded_file.name)
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        st.sidebar.success(f"File **{uploaded_file.name}** berhasil disimpan di mata kuliah **{clean_mk_name}**!")
+        st.rerun()
+
+# ---------------------------------------------------------
+# HALAMAN UTAMA: BACA & KELOLA MATERI
+# ---------------------------------------------------------
+# Ambil daftar folder mata kuliah
+daftar_mk = [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
+
+if not daftar_mk:
+    st.info("👋 Belum ada materi yang di-upload. Silakan gunakan menu **Form Upload Materi** di sidebar sebelah kiri.")
+else:
+    # Filter Mata Kuliah
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        pilih_mk = st.selectbox("📌 Pilih Mata Kuliah:", daftar_mk)
+
+    mk_path = os.path.join(BASE_DIR, pilih_mk)
+    daftar_file = os.listdir(mk_path)
+
+    if not daftar_file:
+        st.warning(f"Belum ada file di dalam mata kuliah **{pilih_mk}**.")
+    else:
+        with col2:
+            pilih_file = st.selectbox("📄 Pilih File Materi:", daftar_file)
 
         st.divider()
 
-        # Tampilkan card/expander materi
-        for idx, row in df_filtered.iterrows():
-            with st.expander(f"📌 [{row['matakuliah']}] {row['judul']} ({row['topik']})"):
-                st.markdown(f"**Mata Kuliah:** {row['matakuliah']}")
-                st.markdown(f"**Topik / Pertemuan:** {row['topik']}")
-                st.markdown("---")
-                st.markdown("**Isi Materi:**")
-                st.markdown(row['konten'])
-                
-                if row['link_ref']:
-                    st.markdown("---")
-                    st.markdown(f"🔗 **Referensi / Link Tambahan:** [{row['link_ref']}]({row['link_ref']})")
+        # Path file yang dipilih
+        file_path = os.path.join(mk_path, pilih_file)
+        file_ext = os.path.splitext(pilih_file)[1].lower()
 
-# ---------------------------------------------------------
-# MENU 2: TAMBAH MATERI BARU
-# ---------------------------------------------------------
-elif menu == "➕ Tambah Materi Baru":
-    st.header("➕ Form Input Materi Kuliah")
-    
-    with st.form(key="form_tambah_materi", clear_on_submit=True):
-        matakuliah = st.text_input("Mata Kuliah (contoh: Digital Forensics, Pemrograman Web, Machine Learning)")
-        topik = st.text_input("Topik / Pertemuan (contoh: Pertemuan 3 - Akuisisi Data)")
-        judul = st.text_input("Judul Materi")
-        konten = st.text_area("Isi Materi (Mendukung format Markdown)", height=250, 
-                              placeholder="Tuliskan materi di sini. Anda bisa menggunakan format markdown seperti:\n# Judul Sub\n- Poin 1\n- Poin 2\n\n```python\n# Kodingan contoh\nprint('Hello World')\n```")
-        link_ref = st.text_input("Link Referensi / Google Drive / Slide (Opsional)", placeholder="https://...")
-        
-        submit_button = st.form_submit_button(label="💾 Simpan Materi")
+        st.subheader(f"📖 {pilih_file}")
 
-    if submit_button:
-        if not matakuliah or not topik or not judul or not konten:
-            st.warning("Harap isi semua kolom yang wajib (Mata Kuliah, Topik, Judul, dan Isi Materi).")
+        # Tampilkan atau Sediakan Tombol Download berdasarkan Ekstensi File
+        if file_ext in [".md", ".txt"]:
+            # Jika teks / markdown, tampilkan isinya langsung di layar
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                isi_teks = f.read()
+            st.markdown(isi_teks)
+
+        elif file_ext == ".pdf":
+            st.info("File dalam format PDF. Anda dapat mengunduh atau membukanya langsung.")
+            with open(file_path, "rb") as f:
+                st.download_button(
+                    label="⬇️ Download PDF Materi",
+                    data=f,
+                    file_name=pilih_file,
+                    mime="application/pdf"
+                )
+
         else:
-            add_materi(matakuliah, topik, judul, konten, link_ref)
-            st.success(f"Materi '{judul}' berhasil disimpan!")
+            # File dokumen seperti DOCX / PPTX
+            st.info(f"File format {file_ext.upper()}. Klik tombol di bawah untuk mengunduh.")
+            with open(file_path, "rb") as f:
+                st.download_button(
+                    label=f"⬇️ Download File ({pilih_file})",
+                    data=f,
+                    file_name=pilih_file
+                )
 
-# ---------------------------------------------------------
-# MENU 3: KELOLA / HAPUS MATERI
-# ---------------------------------------------------------
-elif menu == "⚙️ Kelola / Hapus Materi":
-    st.header("⚙️ Kelola Data Materi")
-    
-    df = get_all_materi()
-    
-    if df.empty:
-        st.info("Belum ada materi untuk dikelola.")
-    else:
-        st.dataframe(df[['id', 'matakuliah', 'topik', 'judul', 'link_ref']], use_container_width=True)
-        
-        st.divider()
-        st.subheader("🗑️ Hapus Materi")
-        
-        materi_to_delete = st.selectbox("Pilih Materi yang akan dihapus:", 
-                                        options=df['id'].tolist(), 
-                                        format_func=lambda x: f"ID {x}: {df[df['id']==x]['judul'].values[0]} ({df[df['id']==x]['matakuliah'].values[0]})")
-        
-        if st.button("❌ Hapus Materi Ini", type="primary"):
-            delete_materi(materi_to_delete)
-            st.success("Materi berhasil dihapus!")
-            st.rerun()
+        # ---------------------------------------------------------
+        # FITUR HAPUS FILE (OPSIONAL)
+        # ---------------------------------------------------------
+        with st.expander("⚙️ Opsi Pengelola File"):
+            if st.button("🗑️ Hapus File Ini", type="secondary"):
+                os.remove(file_path)
+                st.success(f"File {pilih_file} berhasil dihapus.")
+                st.rerun()
