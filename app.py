@@ -1,217 +1,155 @@
 import streamlit as st
-import numpy as np
-import matplotlib.pyplot as plt
+import sqlite3
+import pandas as pd
 
+# ---------------------------------------------------------
+# KONFIGURASI HALAMAN
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title="Logika Fuzzy Suhu Ruangan",
-    page_icon="🌡️",
+    page_title="Repositori Materi Kuliah",
+    page_icon="📚",
     layout="wide"
 )
 
-st.title("🌡️ Studi Kasus Logika Fuzzy")
-st.subheader("Penentuan Tingkat Kepanasan Suhu Ruangan")
+# ---------------------------------------------------------
+# MANAJEMEN DATABASE (SQLite)
+# ---------------------------------------------------------
+DB_FILE = "materi_kuliah.db"
 
-st.markdown("""
-Sistem Smart Room menentukan kondisi suhu menggunakan Logika Fuzzy.
-Satu suhu dapat memiliki lebih dari satu derajat keanggotaan.
-""")
+def init_db():
+    """Membuat tabel database jika belum ada."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS materi (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            matakuliah TEXT NOT NULL,
+            topik TEXT NOT NULL,
+            judul TEXT NOT NULL,
+            konten TEXT NOT NULL,
+            link_ref TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# ==========================
-# Fungsi Keanggotaan
-# ==========================
+def add_materi(matakuliah, topik, judul, konten, link_ref):
+    """Menambah materi baru ke database."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO materi (matakuliah, topik, judul, konten, link_ref)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (matakuliah, topik, judul, konten, link_ref))
+    conn.commit()
+    conn.close()
 
-def dingin(x):
-    if x <= 15:
-        return 1
-    elif 15 < x < 25:
-        return (25 - x) / (25 - 15)
+def get_all_materi():
+    """Mengambil semua materi."""
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM materi ORDER BY id DESC", conn)
+    conn.close()
+    return df
+
+def delete_materi(materi_id):
+    """Menghapus materi berdasarkan ID."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM materi WHERE id = ?", (materi_id,))
+    conn.commit()
+    conn.close()
+
+# Inisialisasi DB saat aplikasi dijalankan
+init_db()
+
+# ---------------------------------------------------------
+# ANTARMUKA UTAMA (UI)
+# ---------------------------------------------------------
+st.title("📚 Platform Repositori Materi Kuliah")
+st.caption("Aplikasi manajemen dan penyimpanan materi perkuliahan interaktif.")
+
+# Sidebar Navigation
+menu = st.sidebar.radio("Navigasi", ["📖 Baca Materi", "➕ Tambah Materi Baru", "⚙️ Kelola / Hapus Materi"])
+
+# ---------------------------------------------------------
+# MENU 1: BACA MATERI
+# ---------------------------------------------------------
+if menu == "📖 Baca Materi":
+    st.header("📖 Daftar Materi Kuliah")
+    
+    df = get_all_materi()
+    
+    if df.empty:
+        st.info("Belum ada materi yang tersimpan. Silakan tambahkan materi melalui menu **➕ Tambah Materi Baru**.")
     else:
-        return 0
+        # Filter berdasarkan Mata Kuliah
+        list_mk = ["Semua Mata Kuliah"] + list(df['matakuliah'].unique())
+        selected_mk = st.selectbox("Filter berdasarkan Mata Kuliah:", list_mk)
+        
+        if selected_mk != "Semua Mata Kuliah":
+            df_filtered = df[df['matakuliah'] == selected_mk]
+        else:
+            df_filtered = df
 
-def hangat(x):
-    if x <= 15 or x >= 35:
-        return 0
-    elif 15 < x <= 25:
-        return (x - 15) / (25 - 15)
-    elif 25 < x < 35:
-        return (35 - x) / (35 - 25)
+        st.divider()
+
+        # Tampilkan card/expander materi
+        for idx, row in df_filtered.iterrows():
+            with st.expander(f"📌 [{row['matakuliah']}] {row['judul']} ({row['topik']})"):
+                st.markdown(f"**Mata Kuliah:** {row['matakuliah']}")
+                st.markdown(f"**Topik / Pertemuan:** {row['topik']}")
+                st.markdown("---")
+                st.markdown("**Isi Materi:**")
+                st.markdown(row['konten'])
+                
+                if row['link_ref']:
+                    st.markdown("---")
+                    st.markdown(f"🔗 **Referensi / Link Tambahan:** [{row['link_ref']}]({row['link_ref']})")
+
+# ---------------------------------------------------------
+# MENU 2: TAMBAH MATERI BARU
+# ---------------------------------------------------------
+elif menu == "➕ Tambah Materi Baru":
+    st.header("➕ Form Input Materi Kuliah")
+    
+    with st.form(key="form_tambah_materi", clear_on_submit=True):
+        matakuliah = st.text_input("Mata Kuliah (contoh: Digital Forensics, Pemrograman Web, Machine Learning)")
+        topik = st.text_input("Topik / Pertemuan (contoh: Pertemuan 3 - Akuisisi Data)")
+        judul = st.text_input("Judul Materi")
+        konten = st.text_area("Isi Materi (Mendukung format Markdown)", height=250, 
+                              placeholder="Tuliskan materi di sini. Anda bisa menggunakan format markdown seperti:\n# Judul Sub\n- Poin 1\n- Poin 2\n\n```python\n# Kodingan contoh\nprint('Hello World')\n```")
+        link_ref = st.text_input("Link Referensi / Google Drive / Slide (Opsional)", placeholder="https://...")
+        
+        submit_button = st.form_submit_button(label="💾 Simpan Materi")
+
+    if submit_button:
+        if not matakuliah or not topik or not judul or not konten:
+            st.warning("Harap isi semua kolom yang wajib (Mata Kuliah, Topik, Judul, dan Isi Materi).")
+        else:
+            add_materi(matakuliah, topik, judul, konten, link_ref)
+            st.success(f"Materi '{judul}' berhasil disimpan!")
+
+# ---------------------------------------------------------
+# MENU 3: KELOLA / HAPUS MATERI
+# ---------------------------------------------------------
+elif menu == "⚙️ Kelola / Hapus Materi":
+    st.header("⚙️ Kelola Data Materi")
+    
+    df = get_all_materi()
+    
+    if df.empty:
+        st.info("Belum ada materi untuk dikelola.")
     else:
-        return 1
-
-def panas(x):
-    if x <= 25:
-        return 0
-    elif 25 < x < 35:
-        return (x - 25) / (35 - 25)
-    else:
-        return 1
-
-# ==========================
-# Input Suhu
-# ==========================
-
-st.sidebar.header("Input")
-
-suhu = st.sidebar.slider(
-    "Masukkan Suhu (°C)",
-    min_value=0,
-    max_value=40,
-    value=30
-)
-
-# ==========================
-# Hitung Derajat Keanggotaan
-# ==========================
-
-mu_dingin = dingin(suhu)
-mu_hangat = hangat(suhu)
-mu_panas = panas(suhu)
-
-# ==========================
-# Hasil
-# ==========================
-
-col1, col2 = st.columns([1,1])
-
-with col1:
-
-    st.markdown("## Hasil Fuzzifikasi")
-
-    st.metric(
-        "❄️ Dingin",
-        f"{mu_dingin:.2f}"
-    )
-
-    st.metric(
-        "😊 Hangat",
-        f"{mu_hangat:.2f}"
-    )
-
-    st.metric(
-        "🔥 Panas",
-        f"{mu_panas:.2f}"
-    )
-
-with col2:
-
-    st.markdown("## Interpretasi")
-
-    kategori = {
-        "Dingin": mu_dingin,
-        "Hangat": mu_hangat,
-        "Panas": mu_panas
-    }
-
-    dominan = max(kategori, key=kategori.get)
-
-    st.success(
-        f"Suhu {suhu}°C lebih dominan pada kategori **{dominan}** "
-        f"dengan derajat keanggotaan {kategori[dominan]:.2f}"
-    )
-
-# ==========================
-# Tabel Hasil
-# ==========================
-
-st.markdown("## Tabel Derajat Keanggotaan")
-
-st.table({
-    "Kategori": ["Dingin", "Hangat", "Panas"],
-    "Derajat Keanggotaan": [
-        round(mu_dingin,2),
-        round(mu_hangat,2),
-        round(mu_panas,2)
-    ]
-})
-
-# ==========================
-# Grafik
-# ==========================
-
-st.markdown("## Grafik Fungsi Keanggotaan")
-
-x = np.arange(0, 41, 1)
-
-y_dingin = [dingin(i) for i in x]
-y_hangat = [hangat(i) for i in x]
-y_panas = [panas(i) for i in x]
-
-fig, ax = plt.subplots(figsize=(10,5))
-
-ax.plot(x, y_dingin, linewidth=3, label="Dingin (Linear Turun)")
-ax.plot(x, y_hangat, linewidth=3, label="Hangat (Segitiga)")
-ax.plot(x, y_panas, linewidth=3, label="Panas (Linear Naik)")
-
-# posisi suhu yang dipilih
-ax.axvline(
-    suhu,
-    linestyle='--',
-    linewidth=2,
-    label=f'Suhu = {suhu}°C'
-)
-
-ax.scatter(
-    [suhu],
-    [mu_dingin],
-    s=100
-)
-
-ax.scatter(
-    [suhu],
-    [mu_hangat],
-    s=100
-)
-
-ax.scatter(
-    [suhu],
-    [mu_panas],
-    s=100
-)
-
-ax.set_title("Grafik Himpunan Fuzzy Suhu")
-ax.set_xlabel("Suhu (°C)")
-ax.set_ylabel("Derajat Keanggotaan μ(x)")
-ax.set_xlim(0,40)
-ax.set_ylim(0,1.1)
-ax.grid(True)
-ax.legend()
-
-st.pyplot(fig)
-
-# ==========================
-# Perhitungan Manual
-# ==========================
-
-st.markdown("## Contoh Perhitungan")
-
-st.write(f"Input Suhu = **{suhu}°C**")
-
-st.latex(
-    rf"\mu_{{dingin}}({suhu})={mu_dingin:.2f}"
-)
-
-st.latex(
-    rf"\mu_{{hangat}}({suhu})={mu_hangat:.2f}"
-)
-
-st.latex(
-    rf"\mu_{{panas}}({suhu})={mu_panas:.2f}"
-)
-
-# ==========================
-# Kesimpulan
-# ==========================
-
-st.markdown("## Kesimpulan")
-
-st.info(
-    f"""
-    Pada suhu {suhu}°C diperoleh:
-
-    - Dingin = {mu_dingin:.2f}
-    - Hangat = {mu_hangat:.2f}
-    - Panas = {mu_panas:.2f}
-
-    Kategori dominan adalah **{dominan}**.
-    """
-)
+        st.dataframe(df[['id', 'matakuliah', 'topik', 'judul', 'link_ref']], use_container_width=True)
+        
+        st.divider()
+        st.subheader("🗑️ Hapus Materi")
+        
+        materi_to_delete = st.selectbox("Pilih Materi yang akan dihapus:", 
+                                        options=df['id'].tolist(), 
+                                        format_func=lambda x: f"ID {x}: {df[df['id']==x]['judul'].values[0]} ({df[df['id']==x]['matakuliah'].values[0]})")
+        
+        if st.button("❌ Hapus Materi Ini", type="primary"):
+            delete_materi(materi_to_delete)
+            st.success("Materi berhasil dihapus!")
+            st.rerun()
